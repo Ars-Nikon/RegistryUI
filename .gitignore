@@ -1,0 +1,20 @@
+# IDE
+.idea/
+
+# Go
+/RegistryUI
+/RegistryUI.exe
+*.exe
+*.out
+*.test
+
+# Frontend build output (deps ignored by web/.gitignore)
+/web/dist/
+
+# Env
+.env
+.env.local
+
+# Local design reference extracted from the mockup
+/.mockup-ref/
+/registryui*.exe
