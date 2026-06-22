@@ -1,23 +1,23 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"RegistryUI/internal/config"
 	"RegistryUI/internal/registry"
 	"RegistryUI/internal/session"
 )
 
-type ctxKey int
+// sessionKey is the gin context key under which the resolved session is stored.
+const sessionKey = "session"
 
-const sessionKey ctxKey = 0
-
-// Server wires session-scoped registry clients into an HTTP handler.
+// Server wires session-scoped registry clients into a gin engine.
 type Server struct {
 	cfg      config.Config
 	sessions *session.Store
@@ -28,76 +28,45 @@ func NewServer(cfg config.Config, sessions *session.Store) *Server {
 	return &Server{cfg: cfg, sessions: sessions}
 }
 
-// Handler returns the root http.Handler with routes and middleware applied.
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+// Engine builds and returns the configured gin engine.
+func (s *Server) Engine() *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery(), s.cors())
 
 	// Auth + bootstrap (no session required).
-	mux.HandleFunc("GET /api/defaults", s.handleDefaults)
-	mux.HandleFunc("POST /api/session", s.handleLogin)
-	mux.HandleFunc("GET /api/session", s.handleSession)
-	mux.HandleFunc("DELETE /api/session", s.handleLogout)
+	r.GET("/api/defaults", s.handleDefaults)
+	r.POST("/api/session", s.handleLogin)
+	r.GET("/api/session", s.handleSession)
+	r.DELETE("/api/session", s.handleLogout)
 
 	// Registry endpoints (session required). Docker repository names are
 	// hierarchical, so repo and tag travel as query parameters.
-	mux.Handle("GET /api/health", s.requireSession(http.HandlerFunc(s.handleHealth)))
-	mux.Handle("GET /api/stats", s.requireSession(http.HandlerFunc(s.handleStats)))
-	mux.Handle("GET /api/repositories", s.requireSession(http.HandlerFunc(s.handleListRepositories)))
-	mux.Handle("GET /api/repository", s.requireSession(http.HandlerFunc(s.handleRepoSummary)))
-	mux.Handle("GET /api/tags", s.requireSession(http.HandlerFunc(s.handleListTags)))
-	mux.Handle("GET /api/tag", s.requireSession(http.HandlerFunc(s.handleTagDetails)))
-	mux.Handle("DELETE /api/tag", s.requireSession(http.HandlerFunc(s.handleDeleteTag)))
+	api := r.Group("/api", s.requireSession)
+	api.GET("/health", s.handleHealth)
+	api.GET("/stats", s.handleStats)
+	api.GET("/repositories", s.handleListRepositories)
+	api.GET("/repository", s.handleRepoSummary)
+	api.GET("/tags", s.handleListTags)
+	api.GET("/tag", s.handleTagDetails)
+	api.DELETE("/tag", s.handleDeleteTag)
 
-	// Serve the built frontend (single-binary / Docker deploy). When the
-	// directory is absent (local dev with the Vite server) the catch-all route
-	// is not registered and only the API is exposed.
-	if h := s.staticHandler(); h != nil {
-		mux.Handle("/", h)
-	}
+	// Serve the built frontend (single-binary / Docker deploy) with SPA fallback.
+	r.NoRoute(s.serveStatic)
 
-	return s.withCORS(mux)
-}
-
-// staticHandler serves the built frontend from cfg.StaticDir with SPA
-// fallback: unknown, non-API paths return index.html so client-side routing
-// works on deep links and refreshes. Returns nil when the directory is missing.
-func (s *Server) staticHandler() http.Handler {
-	dir := s.cfg.StaticDir
-	if dir == "" {
-		return nil
-	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return nil
-	}
-	fileServer := http.FileServer(http.Dir(dir))
-	indexPath := filepath.Join(dir, "index.html")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// API paths never fall through to the SPA.
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		target := filepath.Join(dir, filepath.Clean(r.URL.Path))
-		if info, err := os.Stat(target); err == nil && !info.IsDir() {
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-		http.ServeFile(w, r, indexPath)
-	})
+	return r
 }
 
 // requireSession resolves the session cookie to a registry client and stores it
-// in the request context, or rejects the request with 401.
-func (s *Server) requireSession(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sess, ok := s.currentSession(r)
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, errBody("not authenticated"))
-			return
-		}
-		ctx := context.WithValue(r.Context(), sessionKey, sess)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+// in the gin context, or aborts the request with 401.
+func (s *Server) requireSession(c *gin.Context) {
+	sess, ok := s.currentSession(c.Request)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, errBody("not authenticated"))
+		return
+	}
+	c.Set(sessionKey, sess)
+	c.Next()
 }
 
 func (s *Server) currentSession(r *http.Request) (*session.Session, bool) {
@@ -108,25 +77,53 @@ func (s *Server) currentSession(r *http.Request) (*session.Session, bool) {
 	return s.sessions.Get(cookie.Value)
 }
 
-// clientFrom returns the session's registry client from the request context.
-func clientFrom(r *http.Request) *registry.Client {
-	return r.Context().Value(sessionKey).(*session.Session).Client
+// clientFrom returns the session's registry client from the gin context.
+func clientFrom(c *gin.Context) *registry.Client {
+	return c.MustGet(sessionKey).(*session.Session).Client
 }
 
-// withCORS allows the Vite dev server to call the API cross-origin with cookies.
-func (s *Server) withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", s.cfg.AllowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Vary", "Origin")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
+// cors allows the Vite dev server to call the API cross-origin with cookies.
+func (s *Server) cors() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", s.cfg.AllowedOrigin)
+		c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type")
+		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Vary", "Origin")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
-		next.ServeHTTP(w, r)
-	})
+		c.Next()
+	}
+}
+
+// serveStatic serves the built frontend from cfg.StaticDir with SPA fallback:
+// unknown, non-API paths return index.html so client-side routing works on deep
+// links and refreshes.
+func (s *Server) serveStatic(c *gin.Context) {
+	path := c.Request.URL.Path
+	// Unmatched API paths are genuine 404s, never the SPA.
+	if strings.HasPrefix(path, "/api/") {
+		c.JSON(http.StatusNotFound, errBody("not found"))
+		return
+	}
+	dir := s.cfg.StaticDir
+	if dir == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	target := filepath.Join(dir, filepath.Clean(path))
+	if info, err := os.Stat(target); err == nil && !info.IsDir() {
+		c.File(target)
+		return
+	}
+	index := filepath.Join(dir, "index.html")
+	if _, err := os.Stat(index); err == nil {
+		c.File(index)
+		return
+	}
+	c.Status(http.StatusNotFound)
 }
 
 // newRegistryClient builds a registry client for the given connection details,

@@ -21,9 +21,13 @@ func main() {
 	sessions := session.NewStore(12 * time.Hour)
 	srv := api.NewServer(cfg, sessions)
 
+	// The gin engine is driven by a standard http.Server (gin's recommended
+	// setup) so we keep graceful shutdown, header timeouts and TLS — things
+	// gin's own engine.Run()/RunTLS() do not provide.
+	engine := srv.Engine()
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           srv.Handler(),
+		Handler:           engine,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

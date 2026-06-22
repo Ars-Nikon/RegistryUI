@@ -1,12 +1,13 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"RegistryUI/internal/registry"
 	"RegistryUI/internal/session"
@@ -27,193 +28,183 @@ type sessionResponse struct {
 
 // handleDefaults exposes the allow-listed registries the user may pick from.
 // Credentials are never prefilled.
-func (s *Server) handleDefaults(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"registries": s.cfg.Registries,
-	})
+func (s *Server) handleDefaults(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"registries": s.cfg.Registries})
 }
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleLogin(c *gin.Context) {
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("invalid request body"))
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errBody("invalid request body"))
 		return
 	}
 	req.RegistryURL = strings.TrimSpace(req.RegistryURL)
 	// The registry must be one of the configured options; this prevents the
 	// session client from being pointed at arbitrary (e.g. internal) URLs.
 	if !s.cfg.AllowsRegistry(req.RegistryURL) {
-		writeJSON(w, http.StatusBadRequest, errBody("unknown registry"))
+		c.JSON(http.StatusBadRequest, errBody("unknown registry"))
 		return
 	}
 
 	client := s.newRegistryClient(req.RegistryURL, req.Username, req.Password)
-	if err := client.Ping(r.Context()); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errBody("cannot connect to registry: "+err.Error()))
+	if err := client.Ping(c.Request.Context()); err != nil {
+		c.JSON(http.StatusUnauthorized, errBody("cannot connect to registry: "+err.Error()))
 		return
 	}
 
 	sess, err := s.sessions.Create(client, req.RegistryURL, req.Username)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, errBody("failed to create session"))
+		c.JSON(http.StatusInternalServerError, errBody("failed to create session"))
 		return
 	}
-	s.setSessionCookie(w, r, sess.Token)
-	writeJSON(w, http.StatusOK, sessionResponse{RegistryURL: sess.RegistryURL, Username: sess.Username})
+	s.setSessionCookie(c, sess.Token)
+	c.JSON(http.StatusOK, sessionResponse{RegistryURL: sess.RegistryURL, Username: sess.Username})
 }
 
-func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.currentSession(r)
+func (s *Server) handleSession(c *gin.Context) {
+	sess, ok := s.currentSession(c.Request)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, errBody("not authenticated"))
+		c.JSON(http.StatusUnauthorized, errBody("not authenticated"))
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionResponse{RegistryURL: sess.RegistryURL, Username: sess.Username})
+	c.JSON(http.StatusOK, sessionResponse{RegistryURL: sess.RegistryURL, Username: sess.Username})
 }
 
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(session.CookieName); err == nil {
+func (s *Server) handleLogout(c *gin.Context) {
+	if cookie, err := c.Request.Cookie(session.CookieName); err == nil {
 		s.sessions.Delete(cookie.Value)
 	}
-	s.clearSessionCookie(w, r)
-	w.WriteHeader(http.StatusNoContent)
+	s.clearSessionCookie(c)
+	c.Status(http.StatusNoContent)
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{
+func (s *Server) setSessionCookie(c *gin.Context, token string) {
+	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     session.CookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   c.Request.TLS != nil,
 		Expires:  time.Now().Add(12 * time.Hour),
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+func (s *Server) clearSessionCookie(c *gin.Context) {
+	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     session.CookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   c.Request.TLS != nil,
 		MaxAge:   -1,
 	})
 }
 
 // ---- registry ----
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if err := clientFrom(r).Ping(r.Context()); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "unreachable", "error": err.Error()})
+func (s *Server) handleHealth(c *gin.Context) {
+	if err := clientFrom(c).Ping(c.Request.Context()); err != nil {
+		c.JSON(http.StatusOK, gin.H{"status": "unreachable", "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := clientFrom(r).Stats(r.Context())
+func (s *Server) handleStats(c *gin.Context) {
+	stats, err := clientFrom(c).Stats(c.Request.Context())
 	if err != nil {
-		writeError(w, err)
+		writeError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	c.JSON(http.StatusOK, stats)
 }
 
-func (s *Server) handleListRepositories(w http.ResponseWriter, r *http.Request) {
-	repos, err := clientFrom(r).Catalog(r.Context())
+func (s *Server) handleListRepositories(c *gin.Context) {
+	repos, err := clientFrom(c).Catalog(c.Request.Context())
 	if err != nil {
-		writeError(w, err)
+		writeError(c, err)
 		return
 	}
 	if repos == nil {
 		repos = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"repositories": repos})
+	c.JSON(http.StatusOK, gin.H{"repositories": repos})
 }
 
-func (s *Server) handleRepoSummary(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
+func (s *Server) handleRepoSummary(c *gin.Context) {
+	repo := c.Query("repo")
 	if repo == "" {
-		writeJSON(w, http.StatusBadRequest, errBody("missing required query parameter: repo"))
+		c.JSON(http.StatusBadRequest, errBody("missing required query parameter: repo"))
 		return
 	}
-	sum, err := clientFrom(r).RepoSummary(r.Context(), repo)
+	sum, err := clientFrom(c).RepoSummary(c.Request.Context(), repo)
 	if err != nil {
-		writeError(w, err)
+		writeError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sum)
+	c.JSON(http.StatusOK, sum)
 }
 
-func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
+func (s *Server) handleListTags(c *gin.Context) {
+	repo := c.Query("repo")
 	if repo == "" {
-		writeJSON(w, http.StatusBadRequest, errBody("missing required query parameter: repo"))
+		c.JSON(http.StatusBadRequest, errBody("missing required query parameter: repo"))
 		return
 	}
-	tags, err := clientFrom(r).Tags(r.Context(), repo)
+	tags, err := clientFrom(c).Tags(c.Request.Context(), repo)
 	if err != nil {
-		writeError(w, err)
+		writeError(c, err)
 		return
 	}
 	if tags == nil {
 		tags = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"repository": repo, "tags": tags})
+	c.JSON(http.StatusOK, gin.H{"repository": repo, "tags": tags})
 }
 
-func (s *Server) handleTagDetails(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	tag := r.URL.Query().Get("tag")
+func (s *Server) handleTagDetails(c *gin.Context) {
+	repo := c.Query("repo")
+	tag := c.Query("tag")
 	if repo == "" || tag == "" {
-		writeJSON(w, http.StatusBadRequest, errBody("missing required query parameters: repo and tag"))
+		c.JSON(http.StatusBadRequest, errBody("missing required query parameters: repo and tag"))
 		return
 	}
-	details, err := clientFrom(r).TagDetails(r.Context(), repo, tag)
+	details, err := clientFrom(c).TagDetails(c.Request.Context(), repo, tag)
 	if err != nil {
-		writeError(w, err)
+		writeError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, details)
+	c.JSON(http.StatusOK, details)
 }
 
-func (s *Server) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	tag := r.URL.Query().Get("tag")
+func (s *Server) handleDeleteTag(c *gin.Context) {
+	repo := c.Query("repo")
+	tag := c.Query("tag")
 	if repo == "" || tag == "" {
-		writeJSON(w, http.StatusBadRequest, errBody("missing required query parameters: repo and tag"))
+		c.JSON(http.StatusBadRequest, errBody("missing required query parameters: repo and tag"))
 		return
 	}
-	if err := clientFrom(r).DeleteTag(r.Context(), repo, tag); err != nil {
-		writeError(w, err)
+	if err := clientFrom(c).DeleteTag(c.Request.Context(), repo, tag); err != nil {
+		writeError(c, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
 // ---- helpers ----
 
-func writeError(w http.ResponseWriter, err error) {
+func writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, registry.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, errBody("not found"))
+		c.JSON(http.StatusNotFound, errBody("not found"))
 	default:
 		log.Printf("api error: %v", err)
-		writeJSON(w, http.StatusBadGateway, errBody(err.Error()))
+		c.JSON(http.StatusBadGateway, errBody(err.Error()))
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		log.Printf("encode response: %v", err)
-	}
-}
-
-func errBody(msg string) map[string]any {
-	return map[string]any{"error": msg}
+func errBody(msg string) gin.H {
+	return gin.H{"error": msg}
 }
