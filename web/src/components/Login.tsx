@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { api, type RegistryOption } from '@/lib/api'
 import { useAuth } from '@/state/auth'
 import { useApp } from '@/state/app'
 import { CubeIcon, LockIcon } from '@/components/icons'
@@ -7,19 +7,21 @@ import { CubeIcon, LockIcon } from '@/components/icons'
 export function Login() {
   const { login } = useAuth()
   const { t, lang, setLang } = useApp()
+  const [registries, setRegistries] = useState<RegistryOption[]>([])
   const [registryUrl, setRegistryUrl] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // Prefill from the server-side env defaults.
+  // Load the allow-listed registries; select the first one. Credentials are
+  // never prefilled — the user always enters them.
   useEffect(() => {
     api
       .defaults()
       .then((d) => {
-        setRegistryUrl(d.registryUrl || '')
-        setUsername(d.username || '')
+        setRegistries(d.registries)
+        if (d.registries.length > 0) setRegistryUrl(d.registries[0].url)
       })
       .catch(() => {})
   }, [])
@@ -79,13 +81,17 @@ export function Login() {
           </div>
 
           <label className="field-label">{t.login_url}</label>
-          <input
-            className="field-input"
+          <select
+            className="field-input field-select"
             value={registryUrl}
             onChange={(e) => setRegistryUrl(e.target.value)}
-            placeholder="https://registry.example.com:5000"
-            autoComplete="off"
-          />
+          >
+            {registries.map((r) => (
+              <option key={r.url} value={r.url}>
+                {r.name}
+              </option>
+            ))}
+          </select>
           <label className="field-label">{t.login_user}</label>
           <input
             className="field-input"
@@ -101,7 +107,7 @@ export function Login() {
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
           />
-          <button className="btn-primary" type="submit" disabled={busy}>
+          <button className="btn-primary" type="submit" disabled={busy || !registryUrl}>
             {busy ? t.loading : t.login_signin}
           </button>
 

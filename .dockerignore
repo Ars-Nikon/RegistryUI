@@ -1,0 +1,22 @@
+# VCS / IDE / tooling
+.git
+.gitignore
+.idea
+.omc
+.mockup-ref
+
+# Secrets and local env
+.env
+.env.local
+
+# Build artifacts (rebuilt inside the image)
+RegistryUI
+*.exe
+*.out
+*.test
+web/node_modules
+web/dist
+
+# Docs
+README.md
+web/README.md

@@ -25,11 +25,11 @@ type sessionResponse struct {
 	Username    string `json:"username"`
 }
 
-// handleDefaults exposes the env-configured registry URL/user to prefill the login form.
+// handleDefaults exposes the allow-listed registries the user may pick from.
+// Credentials are never prefilled.
 func (s *Server) handleDefaults(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"registryUrl": s.cfg.RegistryURL,
-		"username":    s.cfg.RegistryUser,
+		"registries": s.cfg.Registries,
 	})
 }
 
@@ -40,11 +40,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.RegistryURL = strings.TrimSpace(req.RegistryURL)
-	if req.RegistryURL == "" {
-		req.RegistryURL = s.cfg.RegistryURL
-	}
-	if req.RegistryURL == "" {
-		writeJSON(w, http.StatusBadRequest, errBody("registry URL is required"))
+	// The registry must be one of the configured options; this prevents the
+	// session client from being pointed at arbitrary (e.g. internal) URLs.
+	if !s.cfg.AllowsRegistry(req.RegistryURL) {
+		writeJSON(w, http.StatusBadRequest, errBody("unknown registry"))
 		return
 	}
 

@@ -5,7 +5,7 @@ import { api, type TagDetails } from '@/lib/api'
 import { keys, useRepoSummary, useTags } from '@/hooks/queries'
 import { useApp } from '@/state/app'
 import { useAuth } from '@/state/auth'
-import { fmtBytes, relTime, fmtDate, shortDigest } from '@/lib/format'
+import { fmtBytes, fmtDate, shortDigest } from '@/lib/format'
 import { CopyIcon, CheckIcon, EyeIcon, TrashSimpleIcon, ChevronDownIcon } from '@/components/icons'
 
 type SortKey = 'tag' | 'created' | 'size'
@@ -27,7 +27,14 @@ function registryHost(url: string | undefined): string {
 
 function platformLabel(d: TagDetails | undefined): string {
   if (!d) return '…'
-  if (d.isIndex) return `${d.platforms?.length ?? 0} platforms`
+  if (d.isIndex) {
+    const platforms = d.platforms ?? []
+    if (platforms.length === 1) {
+      const p = platforms[0]
+      return `${p.os}/${p.architecture}${p.variant ? `/${p.variant}` : ''}`
+    }
+    return `${platforms.length} platforms`
+  }
   return `${d.os ?? 'linux'}/${d.architecture ?? 'amd64'}`
 }
 
@@ -161,9 +168,7 @@ export function Tags() {
                 <div className="tag-meta">
                   <span className="mono">{platformLabel(details)}</span>
                   <span className="dot">·</span>
-                  <span title={details?.created ? fmtDate(details.created, lang) : ''}>
-                    {details?.created ? relTime(details.created, lang) : '—'}
-                  </span>
+                  <span>{details?.created ? fmtDate(details.created, lang) : '—'}</span>
                 </div>
               </div>
               <button

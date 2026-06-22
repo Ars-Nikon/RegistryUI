@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useRepositories, useRepoSummary } from '@/hooks/queries'
 import { useApp } from '@/state/app'
-import { fmtBytes, relTime } from '@/lib/format'
+import { fmtBytes, fmtDate } from '@/lib/format'
 import { CubeIcon, SearchIcon, ChevronRightIcon, PlusIcon } from '@/components/icons'
 
 const PAGE = 20
@@ -35,7 +35,7 @@ function RepoCard({ repo }: { repo: string }) {
         </div>
         <div className="repo-stat" style={{ minWidth: 80 }}>
           <div className="val" style={{ fontWeight: 500 }}>
-            {data?.updated ? relTime(data.updated, lang) : '—'}
+            {data?.updated ? fmtDate(data.updated, lang) : '—'}
           </div>
           <div className="lbl">{t.lbl_updated}</div>
         </div>

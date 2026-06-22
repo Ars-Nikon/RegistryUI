@@ -52,6 +52,11 @@ export interface SessionInfo {
   username: string
 }
 
+export interface RegistryOption {
+  name: string
+  url: string
+}
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -85,7 +90,7 @@ const enc = encodeURIComponent
 
 export const api = {
   // auth
-  defaults: () => request<SessionInfo>('/api/defaults'),
+  defaults: () => request<{ registries: RegistryOption[] }>('/api/defaults'),
   session: () => request<SessionInfo>('/api/session'),
   login: (registryUrl: string, username: string, password: string) =>
     request<SessionInfo>('/api/session', {

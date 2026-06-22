@@ -107,7 +107,7 @@ export const T: Record<Lang, Strings> = {
     login_connect: 'Connect to',
     login_user: 'Username',
     login_pass: 'Password',
-    login_url: 'Registry URL',
+    login_url: 'Registry',
     login_note:
       'Auth follows the token flow: a 401 returns a WWW-Authenticate realm; we exchange credentials for a bearer token scoped per repository & action.',
     toast_copied: 'Copied to clipboard',
@@ -171,7 +171,7 @@ export const T: Record<Lang, Strings> = {
     login_connect: 'Подключение к',
     login_user: 'Имя пользователя',
     login_pass: 'Пароль',
-    login_url: 'Адрес registry',
+    login_url: 'Registry',
     login_note:
       'Авторизация по token-флоу: 401 возвращает realm в WWW-Authenticate; обмениваем учётные данные на bearer-токен со скоупом на репозиторий и действие.',
     toast_copied: 'Скопировано в буфер обмена',

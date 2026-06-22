@@ -212,6 +212,12 @@ func (c *Client) TagDetails(ctx context.Context, repo, tag string) (*TagDetails,
 	if isIndex(rm.contentType, m.MediaType) {
 		details.IsIndex = true
 		for _, d := range m.Manifests {
+			// Skip build attestation / provenance entries (unknown/unknown).
+			// They are metadata attachments, not runnable platform images, and
+			// would otherwise pollute the platform list and the total size.
+			if d.Platform != nil && isAttestation(d.Platform.OS, d.Platform.Architecture) {
+				continue
+			}
 			p := PlatformInfo{Digest: d.Digest, Size: d.Size}
 			if d.Platform != nil {
 				p.OS = d.Platform.OS
@@ -222,6 +228,15 @@ func (c *Client) TagDetails(ctx context.Context, repo, tag string) (*TagDetails,
 			// descriptor size if the child cannot be read.
 			if child, err := c.fetchManifest(ctx, repo, d.Digest); err == nil && !isIndex(child.contentType, child.parsed.MediaType) {
 				p.Size = imageSize(child.parsed)
+				// An index carries no creation date of its own, so surface the
+				// first real image's date.
+				if details.Created == nil {
+					if cfg, _ := c.configBlob(ctx, repo, child.parsed.Config.Digest); cfg != nil {
+						if t, err := time.Parse(time.RFC3339Nano, cfg.Created); err == nil {
+							details.Created = &t
+						}
+					}
+				}
 			}
 			details.Size += p.Size
 			details.Platforms = append(details.Platforms, p)
@@ -426,6 +441,13 @@ func (c *Client) DeleteTag(ctx context.Context, repo, tag string) error {
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// isAttestation reports whether an index entry is a build attestation /
+// provenance manifest rather than a runnable image. Such entries use the
+// "unknown" platform and carry no meaningful creation date.
+func isAttestation(os, arch string) bool {
+	return os == "unknown" || arch == "unknown"
 }
 
 func isIndex(contentType, manifestMediaType string) bool {

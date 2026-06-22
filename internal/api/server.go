@@ -3,6 +3,9 @@ package api
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"RegistryUI/internal/config"
@@ -45,7 +48,42 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/tag", s.requireSession(http.HandlerFunc(s.handleTagDetails)))
 	mux.Handle("DELETE /api/tag", s.requireSession(http.HandlerFunc(s.handleDeleteTag)))
 
+	// Serve the built frontend (single-binary / Docker deploy). When the
+	// directory is absent (local dev with the Vite server) the catch-all route
+	// is not registered and only the API is exposed.
+	if h := s.staticHandler(); h != nil {
+		mux.Handle("/", h)
+	}
+
 	return s.withCORS(mux)
+}
+
+// staticHandler serves the built frontend from cfg.StaticDir with SPA
+// fallback: unknown, non-API paths return index.html so client-side routing
+// works on deep links and refreshes. Returns nil when the directory is missing.
+func (s *Server) staticHandler() http.Handler {
+	dir := s.cfg.StaticDir
+	if dir == "" {
+		return nil
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil
+	}
+	fileServer := http.FileServer(http.Dir(dir))
+	indexPath := filepath.Join(dir, "index.html")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// API paths never fall through to the SPA.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		target := filepath.Join(dir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(target); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, indexPath)
+	})
 }
 
 // requireSession resolves the session cookie to a registry client and stores it
