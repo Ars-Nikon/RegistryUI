@@ -32,6 +32,15 @@ type Config struct {
 	// directory is absent (e.g. local dev with the Vite server) static serving
 	// is disabled and only the API is exposed.
 	StaticDir string
+	// TLSCertFile / TLSKeyFile enable HTTPS when both are set; otherwise the
+	// server listens on plain HTTP.
+	TLSCertFile string
+	TLSKeyFile  string
+}
+
+// TLSEnabled reports whether HTTPS is configured (both cert and key are set).
+func (c Config) TLSEnabled() bool {
+	return c.TLSCertFile != "" && c.TLSKeyFile != ""
 }
 
 // Load reads configuration from the environment, applying sensible defaults.
@@ -47,6 +56,8 @@ func Load() Config {
 		RequestTimeout: envDuration("REGISTRY_TIMEOUT", 15*time.Second),
 		AllowedOrigin:  env("CORS_ORIGIN", "http://localhost:5173", nil),
 		StaticDir:      env("STATIC_DIR", "web/dist", nil),
+		TLSCertFile:    env("TLS_CERT_FILE", "", nil),
+		TLSKeyFile:     env("TLS_KEY_FILE", "", nil),
 	}
 }
 

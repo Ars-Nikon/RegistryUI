@@ -94,6 +94,22 @@ npm run dev        # http://localhost:5173, /api проксируется на :
 | `REGISTRY_TIMEOUT`   | `15s`                    | таймаут запроса к registry (`30s`, `1m` или `30`)   |
 | `CORS_ORIGIN`        | `http://localhost:5173`  | разрешённый origin для dev-фронтенда                |
 | `STATIC_DIR`         | `web/dist`               | каталог собранного фронтенда; если нет — API-only   |
+| `TLS_CERT_FILE`      | —                        | путь к TLS-сертификату; с `TLS_KEY_FILE` включает HTTPS |
+| `TLS_KEY_FILE`       | —                        | путь к TLS-ключу; вместе с `TLS_CERT_FILE` включает HTTPS |
+
+Когда заданы **оба** `TLS_CERT_FILE` и `TLS_KEY_FILE`, сервер слушает только
+HTTPS (обычный HTTP отключается). Пример для Docker Compose: смонтируй
+`cert.pem`/`key.pem` в `/certs` и задай переменные:
+
+```yaml
+    environment:
+      TLS_CERT_FILE: /certs/cert.pem
+      TLS_KEY_FILE: /certs/key.pem
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "8443:8080"
+```
 
 Пример `REGISTRIES` (имя слева опционально, по умолчанию — хост URL):
 

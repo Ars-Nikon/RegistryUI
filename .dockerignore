@@ -8,6 +8,9 @@
 # Secrets and local env
 .env
 .env.local
+certs
+*.pem
+*.key
 
 # Build artifacts (rebuilt inside the image)
 RegistryUI

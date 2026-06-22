@@ -28,10 +28,14 @@ COPY --from=web   /web/dist       ./web/dist
 # comma-separated "Name=URL" pairs, e.g.:
 #   -e REGISTRIES="Production=https://registry.example.com,Local=http://localhost:5000"
 # When unset it falls back to a single entry from REGISTRY_URL.
+# Set TLS_CERT_FILE and TLS_KEY_FILE (mount the certs) to serve HTTPS; when
+# both are set the server listens on TLS only and plain HTTP is disabled.
 ENV PORT=:8080 \
     REGISTRY_URL=http://localhost:5000 \
     REGISTRIES="" \
-    STATIC_DIR=web/dist
+    STATIC_DIR=web/dist \
+    TLS_CERT_FILE="" \
+    TLS_KEY_FILE=""
 EXPOSE 8080
 USER app
 ENTRYPOINT ["./registryui"]

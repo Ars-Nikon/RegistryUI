@@ -1,0 +1,19 @@
+# RegistryUI — сборка и запуск.
+#   docker compose up -d --build
+# UI (HTTPS): https://localhost:8443
+services:
+  registryui:
+    build: .
+    image: registryui:latest
+    restart: unless-stopped
+    ports:
+      - "8443:8080"   # внешний 8443 -> внутренний 8080 (HTTPS)
+    environment:
+      PORT: ":8080"
+      # Список registry для формы входа: "Имя=URL" через запятую.
+      REGISTRIES: "Local=http://host.docker.internal:5000"
+      # HTTPS: при заданных cert+key сервер слушает только TLS (обычный HTTP выключен).
+      TLS_CERT_FILE: /certs/cert.pem
+      TLS_KEY_FILE: /certs/key.pem
+    volumes:
+      - ./certs:/certs:ro   # положи сюда cert.pem и key.pem

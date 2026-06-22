@@ -28,7 +28,14 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("RegistryUI API listening on %s (registry: %s)", cfg.Addr, cfg.RegistryURL)
+		if cfg.TLSEnabled() {
+			log.Printf("RegistryUI API listening on %s (HTTPS, registry: %s)", cfg.Addr, cfg.RegistryURL)
+			if err := httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("server error: %v", err)
+			}
+			return
+		}
+		log.Printf("RegistryUI API listening on %s (HTTP, registry: %s)", cfg.Addr, cfg.RegistryURL)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}

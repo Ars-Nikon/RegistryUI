@@ -15,6 +15,11 @@
 .env
 .env.local
 
+# TLS certificates / keys
+/certs/
+*.pem
+*.key
+
 # Local design reference extracted from the mockup
 /.mockup-ref/
 /registryui*.exe
