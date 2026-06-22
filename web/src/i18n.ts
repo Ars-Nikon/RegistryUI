@@ -55,6 +55,10 @@ export interface Strings {
   settings_appearance_sub: string
   settings_language: string
   settings_language_sub: string
+  settings_sec_about: string
+  settings_github: string
+  settings_github_sub: string
+  settings_github_link: string
   theme_light: string
   theme_dark: string
   multi_arch: string
@@ -121,6 +125,10 @@ export const T: Record<Lang, Strings> = {
     settings_appearance_sub: 'Light or dark interface.',
     settings_language: 'Language',
     settings_language_sub: 'Interface language.',
+    settings_sec_about: 'About',
+    settings_github: 'Source code',
+    settings_github_sub: 'View the project on GitHub.',
+    settings_github_link: 'Open GitHub',
     theme_light: 'Light',
     theme_dark: 'Dark',
     multi_arch: 'multi-arch',
@@ -185,6 +193,10 @@ export const T: Record<Lang, Strings> = {
     settings_appearance_sub: 'Светлый или тёмный интерфейс.',
     settings_language: 'Язык',
     settings_language_sub: 'Язык интерфейса.',
+    settings_sec_about: 'О проекте',
+    settings_github: 'Исходный код',
+    settings_github_sub: 'Открыть проект на GitHub.',
+    settings_github_link: 'Открыть GitHub',
     theme_light: 'Светлая',
     theme_dark: 'Тёмная',
     multi_arch: 'multi-arch',

@@ -1,5 +1,7 @@
 import { useApp } from '@/state/app'
-import { SunIcon, MoonIcon } from '@/components/icons'
+import { SunIcon, MoonIcon, GithubIcon, ExternalLinkIcon } from '@/components/icons'
+
+const GITHUB_URL = 'https://github.com/Ars-Nikon/RegistryUI'
 
 export function Settings() {
   const { t, theme, setTheme, lang, setLang } = useApp()
@@ -53,6 +55,21 @@ export function Settings() {
               Русский
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="section-label">{t.settings_sec_about}</div>
+      <div className="card flush">
+        <div className="setting-row">
+          <div>
+            <div className="setting-name">{t.settings_github}</div>
+            <div className="setting-desc">{t.settings_github_sub}</div>
+          </div>
+          <a className="btn-link" href={GITHUB_URL} target="_blank" rel="noreferrer">
+            <GithubIcon size={15} />
+            {t.settings_github_link}
+            <ExternalLinkIcon size={13} />
+          </a>
         </div>
       </div>
     </div>
