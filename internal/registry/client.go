@@ -34,7 +34,6 @@ type Client struct {
 	password   string
 }
 
-// NewClient builds a registry client for baseURL. username/password are optional.
 func NewClient(baseURL, username, password string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),

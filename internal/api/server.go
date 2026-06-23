@@ -5,44 +5,57 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"RegistryUI/internal/auth"
 	"RegistryUI/internal/config"
 	"RegistryUI/internal/registry"
 	"RegistryUI/internal/session"
 )
 
-// sessionKey is the gin context key under which the resolved session is stored.
-const sessionKey = "session"
+const (
+	cookieName = "Authorization"
+	sessionKey = "session"
+)
 
-// Server wires session-scoped registry clients into a gin engine.
+// userSession is the per-login state kept server-side: the registry
+// credentials, including the password, which never reaches the browser. A
+// fresh registry.Client is built from these on each request.
+type userSession struct {
+	RegistryURL string
+	Username    string
+	Password    string
+}
+
 type Server struct {
 	cfg      config.Config
-	sessions *session.Store
+	auth     *auth.Service
+	sessions *session.Store[*userSession]
 }
 
-// NewServer builds the API server.
-func NewServer(cfg config.Config, sessions *session.Store) *Server {
-	return &Server{cfg: cfg, sessions: sessions}
+func NewServer(cfg config.Config, authSvc *auth.Service) *Server {
+	return &Server{
+		cfg:      cfg,
+		auth:     authSvc,
+		sessions: session.NewStore[*userSession](cfg.JwtTTL),
+	}
 }
 
-// Engine builds and returns the configured gin engine.
 func (s *Server) Engine() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery(), s.cors())
 
-	// Auth + bootstrap (no session required).
+	// Auth + bootstrap (no auth required).
 	r.GET("/api/defaults", s.handleDefaults)
 	r.POST("/api/session", s.handleLogin)
 	r.GET("/api/session", s.handleSession)
 	r.DELETE("/api/session", s.handleLogout)
 
-	// Registry endpoints (session required). Docker repository names are
+	// Registry endpoints (auth required). Docker repository names are
 	// hierarchical, so repo and tag travel as query parameters.
-	api := r.Group("/api", s.requireSession)
+	api := r.Group("/api", s.requireAuth)
 	api.GET("/health", s.handleHealth)
 	api.GET("/stats", s.handleStats)
 	api.GET("/repositories", s.handleListRepositories)
@@ -51,16 +64,13 @@ func (s *Server) Engine() *gin.Engine {
 	api.GET("/tag", s.handleTagDetails)
 	api.DELETE("/tag", s.handleDeleteTag)
 
-	// Serve the built frontend (single-binary / Docker deploy) with SPA fallback.
 	r.NoRoute(s.serveStatic)
 
 	return r
 }
 
-// requireSession resolves the session cookie to a registry client and stores it
-// in the gin context, or aborts the request with 401.
-func (s *Server) requireSession(c *gin.Context) {
-	sess, ok := s.currentSession(c.Request)
+func (s *Server) requireAuth(c *gin.Context) {
+	sess, ok := s.currentSession(c)
 	if !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, errBody("not authenticated"))
 		return
@@ -68,21 +78,26 @@ func (s *Server) requireSession(c *gin.Context) {
 	c.Set(sessionKey, sess)
 	c.Next()
 }
-
-func (s *Server) currentSession(r *http.Request) (*session.Session, bool) {
-	cookie, err := r.Cookie(session.CookieName)
+func (s *Server) currentSession(c *gin.Context) (*userSession, bool) {
+	cookie, err := c.Cookie(cookieName)
 	if err != nil {
 		return nil, false
 	}
-	return s.sessions.Get(cookie.Value)
+	identity, err := s.auth.Decode(cookie)
+	if err != nil {
+		return nil, false
+	}
+	return s.sessions.Get(identity.SessionID)
 }
 
-// clientFrom returns the session's registry client from the gin context.
-func clientFrom(c *gin.Context) *registry.Client {
-	return c.MustGet(sessionKey).(*session.Session).Client
+// clientFrom builds a registry client from the current session's stored
+// credentials. A new client is created per request; the connection pool is not
+// shared across requests.
+func (s *Server) clientFrom(c *gin.Context) *registry.Client {
+	us := c.MustGet(sessionKey).(*userSession)
+	return registry.NewClient(us.RegistryURL, us.Username, us.Password, s.cfg.RequestTimeout)
 }
 
-// cors allows the Vite dev server to call the API cross-origin with cookies.
 func (s *Server) cors() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", s.cfg.AllowedOrigin)
@@ -98,9 +113,6 @@ func (s *Server) cors() gin.HandlerFunc {
 	}
 }
 
-// serveStatic serves the built frontend from cfg.StaticDir with SPA fallback:
-// unknown, non-API paths return index.html so client-side routing works on deep
-// links and refreshes.
 func (s *Server) serveStatic(c *gin.Context) {
 	path := c.Request.URL.Path
 	// Unmatched API paths are genuine 404s, never the SPA.
@@ -124,14 +136,4 @@ func (s *Server) serveStatic(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNotFound)
-}
-
-// newRegistryClient builds a registry client for the given connection details,
-// falling back to the configured timeout.
-func (s *Server) newRegistryClient(registryURL, username, password string) *registry.Client {
-	timeout := s.cfg.RequestTimeout
-	if timeout == 0 {
-		timeout = 15 * time.Second
-	}
-	return registry.NewClient(registryURL, username, password, timeout)
 }

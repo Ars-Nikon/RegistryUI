@@ -16,7 +16,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const qc = useQueryClient()
 
-  // Restore an existing session on first load.
+  // Restore an existing auth on first load.
   useEffect(() => {
     let active = true
     api

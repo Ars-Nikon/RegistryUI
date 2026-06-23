@@ -1,6 +1,7 @@
 package main
 
 import (
+	"RegistryUI/internal/auth"
 	"context"
 	"errors"
 	"log"
@@ -12,18 +13,21 @@ import (
 
 	"RegistryUI/internal/api"
 	"RegistryUI/internal/config"
-	"RegistryUI/internal/session"
 )
 
 func main() {
 	cfg := config.Load()
+	authSvc, err := auth.NewService(auth.Config{
+		Secret: []byte(cfg.JwtSecret),
+		TTL:    cfg.JwtTTL,
+		Issuer: cfg.JwtIssuer,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	sessions := session.NewStore(12 * time.Hour)
-	srv := api.NewServer(cfg, sessions)
+	srv := api.NewServer(cfg, authSvc)
 
-	// The gin engine is driven by a standard http.Server (gin's recommended
-	// setup) so we keep graceful shutdown, header timeouts and TLS — things
-	// gin's own engine.Run()/RunTLS() do not provide.
 	engine := srv.Engine()
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
@@ -45,7 +49,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()

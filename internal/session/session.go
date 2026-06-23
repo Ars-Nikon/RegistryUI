@@ -5,76 +5,106 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
-
-	"RegistryUI/internal/registry"
 )
 
-// CookieName is the cookie that carries the opaque session token.
-const CookieName = "rui_session"
-
-// Session binds a logged-in user to a configured registry client.
-type Session struct {
-	Token       string
-	RegistryURL string
-	Username    string
-	Client      *registry.Client
-	CreatedAt   time.Time
+// Store is an in-memory, TTL-bounded store keyed by an opaque random ID. It is
+// domain-agnostic: callers decide what type T to keep in it. Safe for
+// concurrent use. Suitable for a single-instance deployment.
+//
+// Expired entries are reclaimed two ways: lazily on Get, and proactively by a
+// background janitor so abandoned entries (never accessed again) cannot pile up.
+type Store[T any] struct {
+	mu    sync.RWMutex
+	items map[string]item[T]
+	ttl   time.Duration
+	stop  chan struct{}
 }
 
-// Store is an in-memory session store. Suitable for a single-instance local tool.
-type Store struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	ttl      time.Duration
+type item[T any] struct {
+	value     T
+	createdAt time.Time
 }
 
-// NewStore creates a session store. Sessions older than ttl are evicted on access.
-func NewStore(ttl time.Duration) *Store {
-	return &Store{sessions: make(map[string]*Session), ttl: ttl}
-}
-
-// Create registers a new session for the given registry client.
-func (s *Store) Create(client *registry.Client, registryURL, username string) (*Session, error) {
-	token, err := randomToken()
-	if err != nil {
-		return nil, err
+func NewStore[T any](ttl time.Duration) *Store[T] {
+	s := &Store[T]{
+		items: make(map[string]item[T]),
+		ttl:   ttl,
+		stop:  make(chan struct{}),
 	}
-	sess := &Session{
-		Token:       token,
-		RegistryURL: registryURL,
-		Username:    username,
-		Client:      client,
-		CreatedAt:   time.Now(),
+	if ttl > 0 {
+		go s.janitor()
+	}
+	return s
+}
+
+// janitor periodically evicts expired entries until the store is closed. The
+// sweep interval is the TTL itself, so an abandoned entry lives at most ~2×TTL.
+func (s *Store[T]) janitor() {
+	t := time.NewTicker(s.ttl)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			s.evictExpired()
+		case <-s.stop:
+			return
+		}
+	}
+}
+
+func (s *Store[T]) evictExpired() {
+	now := time.Now()
+	s.mu.Lock()
+	for id, it := range s.items {
+		if now.Sub(it.createdAt) > s.ttl {
+			delete(s.items, id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// Close stops the background janitor. Safe to call once; intended for tests and
+// graceful shutdown. Not required for process exit.
+func (s *Store[T]) Close() {
+	close(s.stop)
+}
+
+// Create stores value under a fresh random ID and returns the ID.
+func (s *Store[T]) Create(value T) (string, error) {
+	id, err := randomID()
+	if err != nil {
+		return "", err
 	}
 	s.mu.Lock()
-	s.sessions[token] = sess
+	s.items[id] = item[T]{value: value, createdAt: time.Now()}
 	s.mu.Unlock()
-	return sess, nil
+	return id, nil
 }
 
-// Get returns the session for a token, or false if missing/expired.
-func (s *Store) Get(token string) (*Session, bool) {
+// Get returns the stored value, or false if it is missing or expired.
+func (s *Store[T]) Get(id string) (T, bool) {
 	s.mu.RLock()
-	sess, ok := s.sessions[token]
+	it, ok := s.items[id]
 	s.mu.RUnlock()
 	if !ok {
-		return nil, false
+		var zero T
+		return zero, false
 	}
-	if s.ttl > 0 && time.Since(sess.CreatedAt) > s.ttl {
-		s.Delete(token)
-		return nil, false
+	if s.ttl > 0 && time.Since(it.createdAt) > s.ttl {
+		s.Delete(id)
+		var zero T
+		return zero, false
 	}
-	return sess, true
+	return it.value, true
 }
 
-// Delete removes a session.
-func (s *Store) Delete(token string) {
+func (s *Store[T]) Delete(id string) {
 	s.mu.Lock()
-	delete(s.sessions, token)
+	delete(s.items, id)
 	s.mu.Unlock()
 }
 
-func randomToken() (string, error) {
+func randomID() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err

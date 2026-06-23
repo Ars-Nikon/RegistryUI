@@ -9,11 +9,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"RegistryUI/internal/auth"
 	"RegistryUI/internal/registry"
-	"RegistryUI/internal/session"
 )
-
-// ---- auth ----
 
 type loginRequest struct {
 	RegistryURL string `json:"registryUrl"`
@@ -26,8 +24,6 @@ type sessionResponse struct {
 	Username    string `json:"username"`
 }
 
-// handleDefaults exposes the allow-listed registries the user may pick from.
-// Credentials are never prefilled.
 func (s *Server) handleDefaults(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"registries": s.cfg.Registries})
 }
@@ -39,30 +35,47 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 	req.RegistryURL = strings.TrimSpace(req.RegistryURL)
-	// The registry must be one of the configured options; this prevents the
-	// session client from being pointed at arbitrary (e.g. internal) URLs.
+
 	if !s.cfg.AllowsRegistry(req.RegistryURL) {
 		c.JSON(http.StatusBadRequest, errBody("unknown registry"))
 		return
 	}
 
-	client := s.newRegistryClient(req.RegistryURL, req.Username, req.Password)
+	timeout := s.cfg.RequestTimeout
+	client := registry.NewClient(req.RegistryURL, req.Username, req.Password, timeout)
+
 	if err := client.Ping(c.Request.Context()); err != nil {
 		c.JSON(http.StatusUnauthorized, errBody("cannot connect to registry: "+err.Error()))
 		return
 	}
 
-	sess, err := s.sessions.Create(client, req.RegistryURL, req.Username)
+	id, err := s.sessions.Create(&userSession{
+		RegistryURL: req.RegistryURL,
+		Username:    req.Username,
+		Password:    req.Password,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, errBody("failed to create session"))
 		return
 	}
-	s.setSessionCookie(c, sess.Token)
-	c.JSON(http.StatusOK, sessionResponse{RegistryURL: sess.RegistryURL, Username: sess.Username})
+
+	token, err := s.auth.Generate(auth.Identity{
+		UserName:    req.Username,
+		RegistryURL: req.RegistryURL,
+		SessionID:   id,
+	})
+	if err != nil {
+		s.sessions.Delete(id)
+		c.JSON(http.StatusInternalServerError, errBody("failed to issue token"))
+		return
+	}
+
+	s.setAuthCookie(c, token)
+	c.JSON(http.StatusOK, sessionResponse{RegistryURL: req.RegistryURL, Username: req.Username})
 }
 
 func (s *Server) handleSession(c *gin.Context) {
-	sess, ok := s.currentSession(c.Request)
+	sess, ok := s.currentSession(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, errBody("not authenticated"))
 		return
@@ -71,28 +84,30 @@ func (s *Server) handleSession(c *gin.Context) {
 }
 
 func (s *Server) handleLogout(c *gin.Context) {
-	if cookie, err := c.Request.Cookie(session.CookieName); err == nil {
-		s.sessions.Delete(cookie.Value)
+	if cookie, err := c.Cookie(cookieName); err == nil {
+		if identity, err := s.auth.Decode(cookie); err == nil {
+			s.sessions.Delete(identity.SessionID)
+		}
 	}
-	s.clearSessionCookie(c)
+	s.clearAuthCookie(c)
 	c.Status(http.StatusNoContent)
 }
 
-func (s *Server) setSessionCookie(c *gin.Context, token string) {
+func (s *Server) setAuthCookie(c *gin.Context, token string) {
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     session.CookieName,
+		Name:     cookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   c.Request.TLS != nil,
-		Expires:  time.Now().Add(12 * time.Hour),
+		Expires:  time.Now().Add(s.cfg.JwtTTL),
 	})
 }
 
-func (s *Server) clearSessionCookie(c *gin.Context) {
+func (s *Server) clearAuthCookie(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     session.CookieName,
+		Name:     cookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -105,7 +120,7 @@ func (s *Server) clearSessionCookie(c *gin.Context) {
 // ---- registry ----
 
 func (s *Server) handleHealth(c *gin.Context) {
-	if err := clientFrom(c).Ping(c.Request.Context()); err != nil {
+	if err := s.clientFrom(c).Ping(c.Request.Context()); err != nil {
 		c.JSON(http.StatusOK, gin.H{"status": "unreachable", "error": err.Error()})
 		return
 	}
@@ -113,7 +128,7 @@ func (s *Server) handleHealth(c *gin.Context) {
 }
 
 func (s *Server) handleStats(c *gin.Context) {
-	stats, err := clientFrom(c).Stats(c.Request.Context())
+	stats, err := s.clientFrom(c).Stats(c.Request.Context())
 	if err != nil {
 		writeError(c, err)
 		return
@@ -122,7 +137,7 @@ func (s *Server) handleStats(c *gin.Context) {
 }
 
 func (s *Server) handleListRepositories(c *gin.Context) {
-	repos, err := clientFrom(c).Catalog(c.Request.Context())
+	repos, err := s.clientFrom(c).Catalog(c.Request.Context())
 	if err != nil {
 		writeError(c, err)
 		return
@@ -139,7 +154,7 @@ func (s *Server) handleRepoSummary(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, errBody("missing required query parameter: repo"))
 		return
 	}
-	sum, err := clientFrom(c).RepoSummary(c.Request.Context(), repo)
+	sum, err := s.clientFrom(c).RepoSummary(c.Request.Context(), repo)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -153,7 +168,7 @@ func (s *Server) handleListTags(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, errBody("missing required query parameter: repo"))
 		return
 	}
-	tags, err := clientFrom(c).Tags(c.Request.Context(), repo)
+	tags, err := s.clientFrom(c).Tags(c.Request.Context(), repo)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -171,7 +186,7 @@ func (s *Server) handleTagDetails(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, errBody("missing required query parameters: repo and tag"))
 		return
 	}
-	details, err := clientFrom(c).TagDetails(c.Request.Context(), repo, tag)
+	details, err := s.clientFrom(c).TagDetails(c.Request.Context(), repo, tag)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -186,7 +201,7 @@ func (s *Server) handleDeleteTag(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, errBody("missing required query parameters: repo and tag"))
 		return
 	}
-	if err := clientFrom(c).DeleteTag(c.Request.Context(), repo, tag); err != nil {
+	if err := s.clientFrom(c).DeleteTag(c.Request.Context(), repo, tag); err != nil {
 		writeError(c, err)
 		return
 	}

@@ -1,4 +1,4 @@
-// Typed client for the RegistryUI Go backend. Cookies carry the session, so
+// Typed client for the RegistryUI Go backend. Cookies carry the auth, so
 // every request is sent with credentials.
 
 export interface Platform {
